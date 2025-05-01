@@ -12,85 +12,97 @@
  *   - Requires RPM to be held above threshold for a duration
  *   - Accepts engine RPM via PGN 127488 (Engine Parameters)
  *   - Tracks BMS and alternator temperature states (via flags)
- *   - Outputs charge enable signal to alternator field
- *
- * CAN Messaging:
- *   - PGN 127488: Engine Speed input (used to control charging logic)
+ *   - Outputs charge enable signal to alternator field (with soft-start)
+ *   - Disables field if CAN messages are lost
  *
  * Author: David Ross
  * Date: 30 April 2025
- * Version: 1.0
+ * Version: 1.1
  * License: MIT
  * ---------------------------------------------------------------
  */
 
-
 #include <FlexCAN_T4.h>
 FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_16> Can0;
 
-// Output pin that controls the alternator field (charge enable)
 const int FIELD_PIN = 5;
-
-// System conditions that impact charging
 bool bmsAllowsCharge = true;
 bool alternatorOverTemp = false;
 
-// Engine RPM tracking via NMEA 2000 (PGN 127488)
-float currentRPM = 0;                         // Current engine RPM
-unsigned long rpmAboveThresholdStartMillis = 0;  // Timestamp when RPM exceeded threshold
-unsigned long lastRPMMillis = 0;              // Time last valid RPM was received
+float currentRPM = 0;
+unsigned long rpmAboveThresholdStartMillis = 0;
+unsigned long lastRPMMillis = 0;
+unsigned long lastCANMillis = 0;
+
+bool fieldEnabled = false;
 
 /**
  * setup()
- * Initializes I/O pins, serial output, and CAN bus interface.
+ * Initializes CAN bus and field control pin.
  */
 void setup() {
-  pinMode(FIELD_PIN, OUTPUT);                 // Alternator control output
-  digitalWrite(FIELD_PIN, LOW);               // Default to not charging
-  Serial.begin(9600);                         // Serial monitor for debug
-  Can0.begin();                               // Initialize CAN interface
-  Can0.setBaudRate(250000);                   // Standard NMEA 2000 bitrate
+  pinMode(FIELD_PIN, OUTPUT);
+  analogWrite(FIELD_PIN, 0);
+  Serial.begin(9600);
+  Can0.begin();
+  Can0.setBaudRate(250000);
 }
 
 /**
  * loop()
- * Runs every cycle to process CAN messages and determine whether to enable alternator charging.
+ * Evaluates whether charging is allowed and applies soft start.
  */
+
+
 void loop() {
+  alternatorTempC = readAlternatorTemperature();
+
+  // Periodically broadcast alternator temperature over CAN
+  if (millis() - lastTempSend > 1000) {
+    sendAlternatorTempCAN();
+    lastTempSend = millis();
+  }
+
+  alternatorTempC = readAlternatorTemperature();
+
   static unsigned long lastUpdate = 0;
   unsigned long now = millis();
 
-  // Continuously process incoming CAN data (engine RPM, etc.)
   processCANMessages();
 
-  // Check every second if alternator should be charging
+  // CAN watchdog: turn off field if comms lost
+  if (now - lastCANMillis > 3000) {
+    disableField("CAN timeout");
+    return;
+  }
+
+  // Check every 1s whether to (re)enable field
   if (now - lastUpdate > 1000) {
     lastUpdate = now;
 
-    bool chargingAllowed = canCharge();
-    digitalWrite(FIELD_PIN, chargingAllowed ? HIGH : LOW); // Enable or disable charging
-
-    // Debug output
+    bool allow = canCharge();
     Serial.print("RPM: ");
     Serial.print(currentRPM);
-    Serial.print(" | Charging: ");
-    Serial.println(chargingAllowed ? "ENABLED" : "DISABLED");
+    Serial.print(" | Charge OK: ");
+    Serial.println(allow ? "YES" : "NO");
+
+    if (allow && !fieldEnabled) {
+      enableFieldSoftStart();
+    } else if (!allow && fieldEnabled) {
+      disableField("Conditions not met");
+    }
   }
 }
 
 /**
  * canCharge()
- * Returns true if all charging conditions are met:
- *  - RPM has exceeded cruise threshold for enough time
- *  - BMS allows charge
- *  - Alternator is not over temperature
+ * Returns true if all conditions for safe charging are met.
  */
 bool canCharge() {
-  const int cruiseRPMThreshold = 1200;               // Minimum RPM to allow charging
-  const unsigned long rpmHoldDuration = 30000;       // Required duration above RPM (30 sec)
+  const int cruiseRPMThreshold = 1200;
+  const unsigned long rpmHoldDuration = 30000;
   unsigned long now = millis();
 
-  // Track when RPM first rises above threshold
   if (currentRPM > cruiseRPMThreshold) {
     if (rpmAboveThresholdStartMillis == 0) {
       rpmAboveThresholdStartMillis = now;
@@ -99,7 +111,6 @@ bool canCharge() {
     rpmAboveThresholdStartMillis = 0;
   }
 
-  // Allow charging only if RPM has been high long enough and other conditions are OK
   bool rpmOK = currentRPM > cruiseRPMThreshold &&
                (now - rpmAboveThresholdStartMillis > rpmHoldDuration);
 
@@ -108,16 +119,87 @@ bool canCharge() {
 
 /**
  * processCANMessages()
- * Reads CAN messages and extracts engine RPM from PGN 127488.
- * RPM is decoded from bytes 4–5 (LSB first), scaled in 0.25 RPM units.
+ * Reads PGN 127488 and updates engine RPM.
  */
 void processCANMessages() {
   CAN_message_t msg;
   while (Can0.read(msg)) {
+    lastCANMillis = millis();
+
     if (msg.id == 127488 && msg.len >= 8) {
-      uint16_t rpmRaw = msg.buf[3] | (msg.buf[4] << 8); // Little-endian
-      currentRPM = rpmRaw * 0.25;                        // Scale factor
-      lastRPMMillis = millis();                          // Track last valid update
+      uint16_t rpmRaw = msg.buf[3] | (msg.buf[4] << 8);
+      currentRPM = rpmRaw * 0.25;
+      lastRPMMillis = millis();
     }
   }
+}
+
+/**
+ * enableFieldSoftStart()
+ * Gradually ramps up the field to reduce startup shock and apply derating if needed.
+ * Derates above 80°C and cuts off field above 95°C.
+ */
+
+void enableFieldSoftStart() {
+  Serial.println("Enabling field (soft start)");
+  const int steps = 20;
+  const int maxPWM = 255;
+
+  for (int i = 0; i <= steps; i++) {
+    int pwm = (i * maxPWM) / steps;
+
+// Apply derating based on alternator temperature
+if (alternatorTempC >= 95.0) {
+  pwm = 0;
+} else if (alternatorTempC >= 80.0) {
+  float factor = 1.0 - ((alternatorTempC - 80.0) / 15.0);  // Linear scale down
+  pwm *= factor;
+}
+
+    analogWrite(FIELD_PIN, pwm);
+    delay(100); // ~2 seconds total
+  }
+  fieldEnabled = true;
+}
+
+/**
+ * disableField(reason)
+ * Turns off the alternator field.
+ */
+void disableField(const char* reason) {
+  analogWrite(FIELD_PIN, 0);
+  if (fieldEnabled) {
+    Serial.print("Disabling field: ");
+    Serial.println(reason);
+  }
+  fieldEnabled = false;
+}
+
+
+/**
+ * readAlternatorTemperature()
+ * Reads analog voltage from TMP36-style sensor and converts to Celsius.
+ */
+float readAlternatorTemperature() {
+  int raw = analogRead(ALT_TEMP_PIN);
+  float voltage = raw * (3.3 / 1023.0);      // for 3.3V Feather boards
+  float tempC = (voltage - 0.5) * 100.0;     // TMP36 formula
+  return tempC;
+}
+
+
+/**
+ * sendAlternatorTempCAN()
+ * Sends alternator temperature (in °C * 100) as a 2-byte integer over CAN.
+ */
+void sendAlternatorTempCAN() {
+  int16_t tempRaw = alternatorTempC * 100;  // scale for 0.01°C precision
+
+  CAN_message_t msg;
+  msg.id = PGN_ALT_TEMP;
+  msg.len = 2;
+  msg.buf[0] = tempRaw & 0xFF;
+  msg.buf[1] = (tempRaw >> 8) & 0xFF;
+
+  Can0.write(msg);
 }
