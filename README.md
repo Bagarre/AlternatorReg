@@ -1,3 +1,4 @@
+
 # Smart Alternator Regulator + Bow Thruster & Windlass Controller
 
 This project provides coordinated control of a marine 12V system using two CAN-enabled microcontrollers:
@@ -18,17 +19,21 @@ This project provides coordinated control of a marine 12V system using two CAN-e
 - NMEA 2000 physical layer (250 kbps CAN)
 - PGN 127488 (Engine Speed) decoded from engine network
 - Custom PGNs for system control (bow/helm)
+- Custom PGN 0x220 used to broadcast alternator temperature
 
 ### 🔋 Alternator Regulator
-- Controls 12V field via GPIO pin
+- Controls 12V field via PWM (soft start enabled)
 - Charging allowed if:
   - Engine RPM > 1200 for 30s
   - BMS allows charge (flag)
-  - Alternator not over temperature (flag)
+  - Alternator is not over temperature
+  - CAN messages are actively received
+- Derates field power linearly from 80°C–95°C
+- Turns off field if alternator temp exceeds 95°C
 
 ### 🔌 Sensors & Inputs
 - **INA226**: Current sensing for alternator output (external)
-- **DS18B20 / TMP36**: For battery and alternator temperature (optional)
+- **TMP36 analog sensor** on A1: Reads alternator temperature
 - **Voltage divider**: Monitors battery voltage
 - **Digital Inputs**: Local control buttons for thruster, windlass
 
@@ -41,14 +46,15 @@ This project provides coordinated control of a marine 12V system using two CAN-e
 
 ## 🔄 CAN Message Map
 
-| PGN      | Direction | Purpose                      |
-|----------|-----------|------------------------------|
-| `0x100`  | IN        | Power arm/disarm             |
-| `0x110`  | IN        | Bow thruster direction (L/R) |
-| `0x120`  | IN        | Windlass up/down             |
-| `0x127488` | IN      | Engine RPM (standard PGN)    |
-| `0x200`  | OUT       | Status (Armed, Low Voltage)  |
-| `0x210`  | OUT       | Beeper feedback control      |
+| PGN      | Direction | Purpose                            |
+|----------|-----------|------------------------------------|
+| `0x100`  | IN        | Power arm/disarm                   |
+| `0x110`  | IN        | Bow thruster direction (L/R)       |
+| `0x120`  | IN        | Windlass up/down                   |
+| `0x127488` | IN      | Engine RPM (standard PGN)          |
+| `0x200`  | OUT       | Status (Armed, Low Voltage)        |
+| `0x210`  | OUT       | Beeper feedback control            |
+| `0x220`  | OUT       | Alternator temperature (0.01°C)    |
 
 ---
 
@@ -61,8 +67,11 @@ This project provides coordinated control of a marine 12V system using two CAN-e
 
 ### alternator_regulator.ino
 - Listens to engine RPM over CAN (PGN 127488)
-- Enables field pin if RPM > threshold for duration
-- Coordinates with BMS and temperature flags
+- Reads analog alternator temperature from TMP36 on A1
+- Soft-starts the alternator field when charging is permitted
+- Derates or disables charging based on temperature
+- Broadcasts alternator temp over CAN every 1s
+- Disables charging if CAN messages are lost
 
 ---
 
@@ -76,9 +85,10 @@ This project provides coordinated control of a marine 12V system using two CAN-e
 
 ## 📌 Future Additions
 
-- EEPROM-based config (RPM thresholds, delays)
-- NMEA 2000 beeper control feedback
-- Helm Feather UI for monitoring
+- Battery temp input
+- EEPROM-based RPM thresholds
+- Helm-side temperature monitor
+- CAN-based BMS control
 
 ---
 
