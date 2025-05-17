@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Alternator Regulator</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+
+    <img src="alternator-icon.png" alt="Alternator Icon" class="icon-left" />
+    <span class="title">Alternator Control</span>
+    <label class="switch">
+      <input type="checkbox" id="enableToggle" />
+      <span class="slider round"></span>
+    </label>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2 id="enableStatus">Status</h2>
+      <div class="status-grid">
+        <div>Voltage</div><div id="voltage">—</div>
+        <div>Current</div><div id="current">—</div>
+        <div>Field PWM</div><div id="field_pwm">—</div>
+        <div>Alt Temp</div><div id="alt_temp">—</div>
+        <div>Batt Temp</div><div id="batt_temp">—</div>
+        <div>Engine RPM</div><div id="rpm">—</div>
+        <div>Stage</div><div id="stage">—</div>
+        <div>CAN Status</div><div id="can_status">—</div>
+        <div>Last CAN Update</div><div id="last_can">—</div>
+        <div>BMS Permission</div><div id="bms_permission">—</div>
+      </div>
+      <div class="button-row">
+        <button id="rebootBtn" class="reboot">Reboot</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Network</h2>
+      <pre class="log-box"> Blank SSID defaults to AP SSID ALT_REG</pre>
+      <div class="status-grid config-grid">
+        <div>WiFi SSID</div><div><input type="text" id="ssid" /></div>
+        <div>WiFi Password</div><div><input type="password" id="password" /></div>
+      </div>
+
+      <div class="button-row">
+        <button id="submitNetwork">Submit</button>
+        <button id="resetNetwork" class="reboot">Reset Network</button>
+      </div>
+
+
+    </section>
+
+    <section class="card">
+      <h2>Configuration</h2>
+      <div class="status-grid config-grid">
+        <div>Target Voltage - 14.4v</div><div><input type="text" id="targetVoltage" /></div>
+        <div>Current Limit - 120a</div><div><input type="text" id="currentLimit" /></div>
+        <div>Float Voltage - 13.6v</div><div><input type="text" id="floatVoltage" /></div>
+        <div>Derate Temp - 82c</div><div><input type="text" id="derateTemp" /></div>
+        <div>CAN Input -checked </div><div><input type="checkbox" id="canInput" /></div>
+      </div>
+
+      <div class="button-row">
+        <button id="saveConfig">Save Config</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Logs</h2>
+      <pre id="logOutput" class="log-box">Loading logs...</pre>
+    </section>
+
+  </main>
+
+
+
+  <footer>Author: David Ross · License: MIT</footer>
+  <script src="app.js"></script>
+</body>
+</html>
