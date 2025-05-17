@@ -1,3 +1,21 @@
+/*
+ * -------------------------------------------------------------
+ * Smart Alternator Regulator - main.ino
+ * -------------------------------------------------------------
+ * Description:
+ *   ESP32-based alternator field controller with:
+ *   - Real-time CAN input (engine RPM)
+ *   - Voltage and current sensing (INA260)
+ *   - Temperature derating and safety
+ *   - Web-based UI for status, config, and logs
+ *   - Optional Wi-Fi AP fallback and mDNS access
+ *
+ * Author: David Ross
+ * License: MIT
+ * Last Updated: May 2025
+ * -------------------------------------------------------------
+ */
+
 #include <WiFi.h>
 #include <ArduinoJson.h>
 #include <ESPAsyncWebServer.h>

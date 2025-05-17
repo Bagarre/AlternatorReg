@@ -203,36 +203,7 @@ Used to determine if the engine is running above the configured RPM threshold fo
 * Derate Temp: `90`
 * CAN Input: `true`
 
----
 
-## 🔄 Integration with Bow Thruster & Windlass Controller
-
-This regulator can be paired with a separate bow controller for integrated marine power management.
-
-### Coordinated Subsystems
-
-* **Smart Alternator Regulator** (this project)
-
-  * Regulates alternator field based on RPM, temp, and current
-  * Transmits alternator temperature over CAN (PGN `0x220`)
-* **Bow Controller** (optional)
-
-  * Listens for helm commands to control bow thruster and windlass
-  * Shares system power state and status via custom PGNs
-
-### Example CAN Message Map
-
-| PGN        | Direction | Purpose                         |
-| ---------- | --------- | ------------------------------- |
-| `0x100`    | IN        | Power arm/disarm                |
-| `0x110`    | IN        | Bow thruster direction (L/R)    |
-| `0x120`    | IN        | Windlass up/down                |
-| `0x127488` | IN        | Engine RPM (standard PGN)       |
-| `0x200`    | OUT       | Status (Armed, Low Voltage)     |
-| `0x210`    | OUT       | Beeper feedback control         |
-| `0x220`    | OUT       | Alternator temperature (0.01°C) |
-
-This makes the system suitable for distributed marine automation.
 
 ## 📄 Circular Log Feature
 
