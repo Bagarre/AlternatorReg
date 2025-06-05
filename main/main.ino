@@ -1,20 +1,27 @@
 /*
- * -------------------------------------------------------------
- * Smart Alternator Regulator - main.ino
- * -------------------------------------------------------------
+ * ---------------------------------------------------------------
+ * Smart Alternator Regulator
+ * ---------------------------------------------------------------
  * Description:
- *   ESP32-based alternator field controller with:
- *   - Real-time CAN input (engine RPM)
- *   - Voltage and current sensing (INA260)
- *   - Temperature derating and safety
- *   - Web-based UI for status, config, and logs
- *   - Optional Wi-Fi AP fallback and mDNS access
+ *   Controls a 12V alternator field using CAN bus messages and sensor inputs.
+ *   Includes support for Wi-Fi configuration, web UI, simulated sensor values,
+ *   PWM-based field control, and CAN message handling.
+ *
+ * Features:
+ *   - Web UI via SPIFFS with status, configuration, and network settings
+ *   - CAN PGN 127488 decoding for engine RPM
+ *   - Field PWM regulation with voltage/current/temp limits
+ *   - Alternator temperature monitoring
+ *   - Persistent config via Preferences
+ *   - Simulated INA260 sensor values for testing
  *
  * Author: David Ross
+ * Date: May 2025
  * License: MIT
- * Last Updated: May 2025
- * -------------------------------------------------------------
+ * ---------------------------------------------------------------
  */
+
+
 
 #include <WiFi.h>
 #include <ArduinoJson.h>
@@ -25,6 +32,7 @@
 #include <Preferences.h>
 #include "config.h"
 #include <Adafruit_INA260.h>
+#include <regulateFieldPWM>
 
 Adafruit_INA260 ina260;
 
@@ -36,6 +44,7 @@ String floatVoltage;
 String derateTemp;
 bool canInput;
 bool systemEnabled = true;
+string disableField = "WTF";
 String ssid;
 String password;
 int pwmDuty = 0;
@@ -70,11 +79,6 @@ struct LogEntry {
 
 LogEntry logBuffer[LOG_SIZE];
 int logIndex = 0;
-
-
-
-
-
 
 AsyncWebServer server(80);
 
@@ -123,10 +127,6 @@ void setup() {
         if (!systemEnabled) disableField("User disabled");
         request->send(200, "application/json", "{\"status\":\"updated\"}");
     });
-
-
-
-
 
     server.on("/log", HTTP_GET, [](AsyncWebServerRequest *request){
       String out = "[\n";
@@ -258,24 +258,6 @@ void loop() {
   }
 
 }
-
-
-void addLog(const String& event) {
-  float volts = ina260.readBusVoltage() / 1000.0;
-  float amps = ina260.readCurrent();
-  float temp = alternatorTempC;
-
-  logBuffer[logIndex] = {
-    millis() / 1000,
-    event,
-    volts,
-    amps,
-    temp
-  };
-  logIndex = (logIndex + 1) % LOG_SIZE;
-}
-
-
 
 void loadConfig() {
   prefs.begin("altreg", true);
@@ -411,30 +393,30 @@ void processCANMessages() {
 }
 
 
-
-int regulateFieldPWM(int currentPWM) {
-  float sensedVoltage = random(138, 145) / 10.0; // Simulated voltage (13.8–14.4)
-  float sensedCurrent = random(10, 95); // Simulated current in amps
-  float tempLimit = derateTemp.toFloat();
-  float voltTarget = targetVoltage.toFloat();
-  float ampLimit = currentLimit.toFloat();
-
-  // Derate based on temp
-  float derateFactor = 1.0;
-  if (alternatorTempC >= tempLimit) {
-    derateFactor = 0.5;
-  } else if (alternatorTempC >= (tempLimit - 10)) {
-    derateFactor = 1.0 - ((alternatorTempC - (tempLimit - 10)) / 10.0) * 0.5;
-  }
-
-  // Adjust based on voltage error
-  float error = voltTarget - sensedVoltage;
-  int delta = error * 30; // Proportional control factor
-
-  // Apply current clamp
-  if (sensedCurrent > ampLimit) delta -= 5;
-
-  int newPWM = currentPWM + delta;
-  newPWM = constrain(newPWM, 0, (int)(255 * derateFactor));
-  return newPWM;
-}
+//
+// int regulateFieldPWM(int currentPWM) {
+//   float sensedVoltage = random(138, 145) / 10.0; // Simulated voltage (13.8–14.4)
+//   float sensedCurrent = random(10, 95); // Simulated current in amps
+//   float tempLimit = derateTemp.toFloat();
+//   float voltTarget = targetVoltage.toFloat();
+//   float ampLimit = currentLimit.toFloat();
+//
+//   // Derate based on temp
+//   float derateFactor = 1.0;
+//   if (alternatorTempC >= tempLimit) {
+//     derateFactor = 0.5;
+//   } else if (alternatorTempC >= (tempLimit - 10)) {
+//     derateFactor = 1.0 - ((alternatorTempC - (tempLimit - 10)) / 10.0) * 0.5;
+//   }
+//
+//   // Adjust based on voltage error
+//   float error = voltTarget - sensedVoltage;
+//   int delta = error * 30; // Proportional control factor
+//
+//   // Apply current clamp
+//   if (sensedCurrent > ampLimit) delta -= 5;
+//
+//   int newPWM = currentPWM + delta;
+//   newPWM = constrain(newPWM, 0, (int)(255 * derateFactor));
+//   return newPWM;
+// }
