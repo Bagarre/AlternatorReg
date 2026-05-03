@@ -7,7 +7,9 @@
 
 namespace {
 constexpr uint32_t PGN_ENGINE_PARAMETERS_RAPID = 127488;
+constexpr uint32_t PGN_DC_DETAILED_STATUS = 127506;  // includes state of charge
 constexpr unsigned long CAN_TIMEOUT_MS = 3000;
+constexpr unsigned long SOC_TIMEOUT_MS = 10000;
 
 bool driverStarted = false;
 
@@ -70,6 +72,18 @@ void processCANMessages(const AppConfig& config, AppState& state) {
       const uint16_t rpmRaw = message.data[3] | (message.data[4] << 8);
       state.currentRPM = rpmRaw * 0.25f;
     }
+
+    // PGN 127506 - DC Detailed Status. Byte 3 is State of Charge in percent
+    // in common NMEA2000 library encoding. Cerbo/GX devices commonly publish
+    // battery SOC here. Ignore 0xFF/0xFE unavailable values.
+    if (pgn == PGN_DC_DETAILED_STATUS && message.data_length_code >= 4) {
+      const uint8_t socRaw = message.data[3];
+      if (socRaw <= 100) {
+        state.cerboSocPercent = static_cast<float>(socRaw);
+        state.cerboSocValid = true;
+        state.lastSOCMillis = millis();
+      }
+    }
   }
 
   if (!config.canInput) {
@@ -91,5 +105,9 @@ void processCANMessages(const AppConfig& config, AppState& state) {
   if (millis() - state.lastCANMillis > CAN_TIMEOUT_MS) {
     state.canStatus = "Timeout";
     state.canOnline = false;
+  }
+
+  if (state.lastSOCMillis != 0 && millis() - state.lastSOCMillis > SOC_TIMEOUT_MS) {
+    state.cerboSocValid = false;
   }
 }

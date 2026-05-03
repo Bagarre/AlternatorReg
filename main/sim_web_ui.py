@@ -29,6 +29,11 @@ config = {
     "pidKd": 0.0,
     "derateStartTemp": 82.0,
     "derateStopTemp": 96.0,
+    "hardCutoffTemp": 105.0,
+    "hardCutoffResetTemp": 95.0,
+    "socInhibitEnabled": True,
+    "socInhibitHighPercent": 95.0,
+    "socInhibitLowPercent": 90.0,
     "softStartSeconds": 60.0,
     "minStartRPM": 2200.0,
     "rpmHoldSeconds": 300.0,
@@ -46,6 +51,13 @@ state = {
     "temp_duty_cap": 255,
     "current_duty_cap": 255,
     "soft_start_duty_cap": 180,
+    "hard_temp_duty_cap": 255,
+    "hard_temp_cutoff_latched": False,
+    "alternator_over_temp": False,
+    "soc_inhibit_latched": False,
+    "cerbo_soc": 92.0,
+    "cerbo_soc_valid": True,
+    "last_soc_ms_ago": 150,
     "voltage": 14.05,
     "current": 42.0,
     "shunt_mv": 4.2,
@@ -78,7 +90,19 @@ start = time.time()
 def update_state():
     t = time.time() - start
 
-    if state["enabled"] and state["ina226_available"] and state["alt_temp_sensor_ok"]:
+    state["cerbo_soc"] = max(70.0, min(99.0, 92.0 + 5.0 * math.sin(t / 45.0)))
+    state["cerbo_soc_valid"] = True
+    state["last_soc_ms_ago"] = int(150 + 60 * abs(math.sin(t / 5.0)))
+
+    if config.get("socInhibitEnabled", True):
+        if not state["soc_inhibit_latched"] and state["cerbo_soc"] >= config.get("socInhibitHighPercent", 95.0):
+            state["soc_inhibit_latched"] = True
+        elif state["soc_inhibit_latched"] and state["cerbo_soc"] <= config.get("socInhibitLowPercent", 90.0):
+            state["soc_inhibit_latched"] = False
+    else:
+        state["soc_inhibit_latched"] = False
+
+    if state["enabled"] and state["ina226_available"] and state["alt_temp_sensor_ok"] and not state["soc_inhibit_latched"]:
         target = config["targetVoltage"]
         state["voltage"] = target - 0.25 + 0.08 * math.sin(t / 6.0) + random.uniform(-0.015, 0.015)
         state["current"] = max(0.0, min(config["currentLimit"] + 8, 45 + 20 * math.sin(t / 11.0) + random.uniform(-1, 1)))
@@ -91,8 +115,14 @@ def update_state():
         else:
             state["current_duty_cap"] = int(max(0, min(255, 255 * (1 - ((state["current"] - config["currentLimit"]) / 25.0)))))
 
-        # Simulate thermal derating curve.
+        # Simulate thermal derating and hard cutoff.
         alt_temp = 62 + 4 * math.sin(t / 20.0)
+        if not state["hard_temp_cutoff_latched"] and alt_temp >= config["hardCutoffTemp"]:
+            state["hard_temp_cutoff_latched"] = True
+        elif state["hard_temp_cutoff_latched"] and alt_temp <= config["hardCutoffResetTemp"]:
+            state["hard_temp_cutoff_latched"] = False
+        state["alternator_over_temp"] = state["hard_temp_cutoff_latched"]
+        state["hard_temp_duty_cap"] = 0 if state["hard_temp_cutoff_latched"] else 255
         if alt_temp <= config["derateStartTemp"]:
             state["temp_duty_cap"] = 255
         elif alt_temp >= config["derateStopTemp"]:
@@ -102,10 +132,13 @@ def update_state():
             state["temp_duty_cap"] = int(max(0, min(255, 255 * ratio)))
 
         state["soft_start_duty_cap"] = int(min(255, 255 * (t / max(1, config["softStartSeconds"]))))
-        state["requested_pwm"] = min(state["pid_requested_pwm"], state["current_duty_cap"], state["temp_duty_cap"], state["soft_start_duty_cap"])
+        state["requested_pwm"] = min(state["pid_requested_pwm"], state["current_duty_cap"], state["temp_duty_cap"], state["soft_start_duty_cap"], state["hard_temp_duty_cap"])
         state["pwm"] += int(max(-8, min(8, state["requested_pwm"] - state["pwm"])))
         state["field_enabled"] = state["pwm"] > 0
-        if state["temp_duty_cap"] < 255:
+        if state["hard_temp_cutoff_latched"]:
+            state["stage"] = "Hard temp cutoff"
+            state["last_disable_reason"] = "Alternator hard temp cutoff"
+        elif state["temp_duty_cap"] < 255:
             state["stage"] = "Thermal derate"
         elif state["current_duty_cap"] < 255:
             state["stage"] = "Current limit"
@@ -127,6 +160,8 @@ def update_state():
             state["last_disable_reason"] = "INA226 missing"
         elif not state["alt_temp_sensor_ok"]:
             state["last_disable_reason"] = "Alternator temp missing"
+        elif state["soc_inhibit_latched"]:
+            state["last_disable_reason"] = "SOC inhibit"
 
     state["alt_temp_c"] = None if not state["alt_temp_sensor_ok"] else 62 + 4 * math.sin(t / 20.0)
     state["engine_room_temp_c"] = None if not state["engine_room_temp_sensor_ok"] else 36 + 2 * math.sin(t / 30.0)
@@ -190,7 +225,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if self.path == "/api/config":
-            for key in ["targetVoltage", "currentLimit", "pidKp", "pidKi", "pidKd", "derateStartTemp", "derateStopTemp", "softStartSeconds", "minStartRPM", "rpmHoldSeconds", "canInput"]:
+            for key in ["targetVoltage", "currentLimit", "pidKp", "pidKi", "pidKd", "derateStartTemp", "derateStopTemp", "hardCutoffTemp", "hardCutoffResetTemp", "socInhibitEnabled", "socInhibitHighPercent", "socInhibitLowPercent", "softStartSeconds", "minStartRPM", "rpmHoldSeconds", "canInput"]:
                 if key in body:
                     config[key] = body[key]
             logs.append({"time": now_ms, "event": "Simulator config saved"})

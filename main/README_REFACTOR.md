@@ -233,3 +233,89 @@ URL: http://192.168.4.1/
 The firmware now includes a small embedded fallback page at `/`, so the root page should not 404 even if the filesystem has not been uploaded. For the full phone-friendly UI, upload the contents of the `data/` folder to SPIFFS/LittleFS using the Arduino ESP32 filesystem uploader.
 
 If `/api/status` works but CSS/JS/image files return 404, the sketch is running correctly but the filesystem data has not been uploaded.
+
+## Hard Alternator Temperature Cutoff
+
+In addition to the normal linear thermal derating curve, the control loop now has a latched hard cutoff:
+
+- `hardCutoffTempC` default: 105°C
+- `hardCutoffResetTempC` default: 95°C
+
+If alternator case temperature reaches the cutoff, field output is forced to zero and the field remains disabled until the temperature falls below the reset threshold. This prevents rapid on/off flapping around the cutoff point.
+
+If the alternator temperature sensor is missing or invalid, field output is also forced off. DS18B20 invalid readings such as `85°C` and `-127°C` should be treated as sensor failures.
+
+The web API exposes:
+
+- `hard_temp_cutoff_latched`
+- `alternator_over_temp`
+- `hard_temp_duty_cap`
+- `hard_cutoff_temp_c`
+- `hard_cutoff_reset_temp_c`
+
+The web settings API accepts:
+
+- `hardCutoffTemp`
+- `hardCutoffResetTemp`
+
+## Cerbo SOC Inhibit
+
+The controller can optionally inhibit alternator field output based on battery SOC received from the Cerbo/GX over NMEA2000/CAN.
+
+Default behavior:
+
+```text
+SOC inhibit enabled: yes
+Disable field at or above: 95%
+Re-enable field at or below: 90%
+```
+
+This is not a charge-stage controller. The Cerbo/DCVV system still owns charging policy. This feature is only a safety/anti-overcharge guard that prevents the alternator from continuing to push current into an already-full bank.
+
+### CAN Source
+
+The firmware listens for:
+
+```text
+PGN 127506 - DC Detailed Status
+```
+
+The firmware reads State of Charge from byte 3 when the value is 0-100. Values outside that range are ignored as unavailable/invalid.
+
+### Runtime Behavior
+
+When SOC inhibit is enabled:
+
+```text
+SOC >= high threshold -> latch SOC inhibit and disable field
+SOC <= low threshold  -> clear SOC inhibit and allow regulation again
+```
+
+The latch prevents rapid on/off cycling near the threshold.
+
+If SOC data is not available, the SOC inhibit does not trip. Other safety checks still apply: INA226 presence, alternator temp, CAN/RPM requirement, current limit, and hard temp cutoff.
+
+### Web UI / API Fields
+
+`GET /api/status` includes:
+
+```json
+{
+  "cerbo_soc": 94,
+  "cerbo_soc_valid": true,
+  "soc_inhibit_latched": false,
+  "last_soc_ms_ago": 250
+}
+```
+
+`GET /api/config` includes:
+
+```json
+{
+  "socInhibitEnabled": true,
+  "socInhibitHighPercent": 95,
+  "socInhibitLowPercent": 90
+}
+```
+
+`POST /api/config` accepts those same fields.

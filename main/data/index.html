@@ -7,150 +7,205 @@
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
-  <header class="topbar">
-    <div class="title-wrap">
-      <img src="/alternator-icon.png" alt="Alternator icon" class="icon" />
-      <div>
-        <h1>Alternator Regulator</h1>
-        <p id="networkSummary">Loading network…</p>
+  <main class="app-shell">
+    <header class="hero">
+      <div class="brand-row">
+        <img src="/alternator-icon.png" alt="Alternator icon" class="brand-icon" />
+        <div>
+          <h1>Alternator Regulator</h1>
+          <p id="networkSummary">alternatorreg · no IP</p>
+        </div>
       </div>
-    </div>
+      <div class="hero-pill" id="overallStatus">offline</div>
+    </header>
 
-    <label class="switch-wrap">
-      <span id="enableStatusLabel">Disabled</span>
-      <label class="switch">
-        <input type="checkbox" id="enableToggle" />
-        <span class="slider"></span>
-      </label>
-    </label>
-  </header>
-
-  <main class="layout">
-    <section class="card">
-      <div class="card-header">
-        <h2>Status</h2>
-        <div class="button-row">
-          <button id="refreshBtn" class="secondary">Refresh</button>
-          <button id="rebootBtn" class="danger">Reboot</button>
+    <section class="panel operational-panel">
+      <div class="panel-header">
+        <h2>Operational Data</h2>
+        <div class="header-actions">
+          <span class="status-pill" id="canPill">CAN offline</span>
+          <button id="refreshBtn" class="btn muted">Refresh</button>
+          <button id="rebootBtn" class="btn danger">Reboot</button>
         </div>
       </div>
 
-      <div class="kv-grid" id="statusGrid">
-        <div>Voltage</div><div id="voltage">—</div>
-        <div>Current</div><div id="current">—</div>
-        <div>Shunt mV</div><div id="shunt_mv">—</div>
-        <div>Field PWM</div><div id="field_pwm">—</div>
-        <div>Requested PWM</div><div id="requested_pwm">—</div>
-        <div>PID Request</div><div id="pid_requested_pwm">—</div>
-        <div>Temp Cap</div><div id="temp_duty_cap">—</div>
-        <div>Current Cap</div><div id="current_duty_cap">—</div>
-        <div>Soft Start Cap</div><div id="soft_start_duty_cap">—</div>
-        <div>Alternator Temp</div><div id="alt_temp">—</div>
-        <div>Engine Room Temp</div><div id="engine_room_temp">—</div>
-        <div>RPM</div><div id="rpm">—</div>
-        <div>Stage</div><div id="stage">—</div>
-        <div>Startup Check</div><div id="startup_status">—</div>
-        <div>INA226</div><div id="ina226_status">—</div>
-        <div>CAN Status</div><div id="can_status">—</div>
-        <div>Last CAN</div><div id="last_can">—</div>
-        <div>BMS Permission</div><div id="bms_permission">—</div>
-        <div>Field Enabled</div><div id="field_enabled">—</div>
-        <div>Last Disable Reason</div><div id="last_disable_reason">—</div>
+      <div class="metrics-grid primary-metrics">
+        <div class="metric-card">
+          <span>Voltage</span>
+          <strong id="voltage">--</strong>
+        </div>
+        <div class="metric-card">
+          <span>Current</span>
+          <strong id="current">--</strong>
+        </div>
+        <div class="metric-card">
+          <span>Alt Temp</span>
+          <strong id="alt_temp">--</strong>
+        </div>
+        <div class="metric-card">
+          <span>Engine Room</span>
+          <strong id="engine_room_temp">--</strong>
+        </div>
+      </div>
+
+      <div class="split-grid">
+        <div class="sub-card">
+          <div class="sub-header">
+            <h3>Regulator</h3>
+            <span class="status-pill" id="enableBadge">Disabled</span>
+          </div>
+          <div class="detail-list">
+            <div><span>Commanded</span><strong id="enabledText">--</strong></div>
+            <div><span>Field Enabled</span><strong id="field_enabled">--</strong></div>
+            <div><span>Field PWM</span><strong id="field_pwm">--</strong></div>
+            <div><span>Requested PWM</span><strong id="requested_pwm">--</strong></div>
+            <div><span>PID Request</span><strong id="pid_requested_pwm">--</strong></div>
+            <div><span>Last Disable</span><strong id="last_disable_reason">--</strong></div>
+          </div>
+          <button id="enableButton" class="wide-button disabled">Disabled</button>
+        </div>
+
+        <div class="sub-card">
+          <div class="sub-header">
+            <h3>Limits</h3>
+            <span class="status-pill" id="startupBadge">startup</span>
+          </div>
+          <div class="detail-list">
+            <div><span>Temp Cap</span><strong id="temp_duty_cap">--</strong></div>
+            <div><span>Current Cap</span><strong id="current_duty_cap">--</strong></div>
+            <div><span>Soft Start Cap</span><strong id="soft_start_duty_cap">--</strong></div>
+            <div><span>Hard Temp Cutoff</span><strong id="hard_temp_cutoff_latched">--</strong></div>
+            <div><span>RPM</span><strong id="rpm">--</strong></div>
+            <div><span>BMS Permission</span><strong id="bms_permission">--</strong></div>
+            <div><span>Cerbo SOC</span><strong id="cerbo_soc">--</strong></div>
+            <div><span>SOC Inhibit</span><strong id="soc_inhibit_latched">--</strong></div>
+            <div><span>Stage</span><strong id="stage">--</strong></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="node-strip">
+        <div class="indicator" id="inaIndicator"><span></span> INA226</div>
+        <div class="indicator" id="altTempIndicator"><span></span> ALT TEMP</div>
+        <div class="indicator" id="engineTempIndicator"><span></span> AMBIENT</div>
+        <div class="indicator" id="canIndicator"><span></span> CAN</div>
+        <div class="indicator" id="startupIndicator"><span></span> STARTUP</div>
       </div>
     </section>
 
-    <section class="card">
-      <div class="card-header">
-        <h2>Configuration</h2>
-        <button id="saveConfig">Save</button>
+    <section class="panel settings-panel">
+      <div class="panel-header">
+        <h2>Settings</h2>
+        <button id="saveConfig" class="btn primary">Save Settings</button>
       </div>
 
-      <div class="form-grid">
-        <label>
+      <div class="settings-grid">
+        <label class="field">
           <span>Target Voltage</span>
           <input type="number" step="0.1" id="targetVoltage" />
         </label>
-
-        <label>
+        <label class="field">
           <span>Current Limit</span>
           <input type="number" step="1" id="currentLimit" />
         </label>
-
-        <label>
+        <label class="field">
           <span>PID Kp</span>
           <input type="number" step="0.1" id="pidKp" />
         </label>
-
-        <label>
+        <label class="field">
           <span>PID Ki</span>
           <input type="number" step="0.1" id="pidKi" />
         </label>
-
-        <label>
+        <label class="field">
           <span>PID Kd</span>
           <input type="number" step="0.1" id="pidKd" />
         </label>
-
-        <label>
+        <label class="field">
           <span>Derate Start Temp (°C)</span>
           <input type="number" step="0.1" id="derateStartTemp" />
         </label>
-
-        <label>
+        <label class="field">
           <span>Derate Stop Temp (°C)</span>
           <input type="number" step="0.1" id="derateStopTemp" />
         </label>
-
-        <label>
+        <label class="field">
+          <span>Hard Cutoff Temp (°C)</span>
+          <input type="number" step="0.1" id="hardCutoffTemp" />
+        </label>
+        <label class="field">
+          <span>Hard Cutoff Reset (°C)</span>
+          <input type="number" step="0.1" id="hardCutoffResetTemp" />
+        </label>
+        <label class="field">
+          <span>SOC Inhibit High (%)</span>
+          <input type="number" step="1" id="socInhibitHighPercent" />
+        </label>
+        <label class="field">
+          <span>SOC Re-enable Low (%)</span>
+          <input type="number" step="1" id="socInhibitLowPercent" />
+        </label>
+        <label class="field">
           <span>Soft Start (seconds)</span>
           <input type="number" step="1" id="softStartSeconds" />
         </label>
-
-        <label>
+        <label class="field">
           <span>Minimum Start RPM</span>
           <input type="number" step="50" id="minStartRPM" />
         </label>
-
-        <label>
+        <label class="field">
           <span>RPM Hold Time (seconds)</span>
           <input type="number" step="10" id="rpmHoldSeconds" />
         </label>
-
-        <label class="checkbox-row">
+        <label class="toggle-card">
+          <input type="checkbox" id="socInhibitEnabled" />
+          <span>Disable field above Cerbo SOC threshold</span>
+        </label>
+        <label class="toggle-card">
           <input type="checkbox" id="canInput" />
           <span>Require CAN/RPM input</span>
         </label>
       </div>
     </section>
 
-    <section class="card">
-      <div class="card-header">
+    <section class="panel settings-panel">
+      <div class="panel-header">
         <h2>Network</h2>
-        <div class="button-row">
-          <button id="submitNetwork">Save & Reboot</button>
-          <button id="resetNetwork" class="secondary">Reset Network</button>
+        <div class="header-actions">
+          <button id="submitNetwork" class="btn primary">Save & Reboot</button>
+          <button id="resetNetwork" class="btn muted">Reset Network</button>
         </div>
       </div>
-
-      <div class="form-grid">
-        <label>
+      <div class="settings-grid two-col">
+        <label class="field">
           <span>Wi-Fi SSID</span>
           <input type="text" id="ssid" placeholder="Blank = fallback AP" />
         </label>
-
-        <label>
+        <label class="field">
           <span>Wi-Fi Password</span>
           <input type="password" id="password" />
         </label>
       </div>
     </section>
 
-    <section class="card">
-      <div class="card-header">
-        <h2>Logs</h2>
-        <button id="refreshLogs" class="secondary">Refresh Logs</button>
+    <section class="panel verbose-panel">
+      <div class="panel-header">
+        <h2>Verbose / Debug</h2>
+        <button id="refreshLogs" class="btn muted">Refresh Logs</button>
       </div>
-      <pre id="logOutput" class="log-box">Loading logs…</pre>
+      <div class="debug-grid">
+        <div class="detail-list debug-list">
+          <div><span>Shunt mV</span><strong id="shunt_mv">--</strong></div>
+          <div><span>Startup Check</span><strong id="startup_status">--</strong></div>
+          <div><span>INA226</span><strong id="ina226_status">--</strong></div>
+          <div><span>CAN Status</span><strong id="can_status">--</strong></div>
+          <div><span>Last CAN</span><strong id="last_can">--</strong></div>
+          <div><span>Last SOC</span><strong id="last_soc">--</strong></div>
+          <div><span>Maintenance</span><strong id="maintenance_mode">--</strong></div>
+          <div><span>Network Mode</span><strong id="network_mode">--</strong></div>
+          <div><span>IP Address</span><strong id="ip_address">--</strong></div>
+        </div>
+        <pre id="logOutput" class="log-box">Loading logs…</pre>
+      </div>
     </section>
   </main>
 

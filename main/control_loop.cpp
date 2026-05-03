@@ -98,6 +98,52 @@ uint8_t tempDerateCap(const AppConfig& config, const AppState& state) {
   return clampDuty(static_cast<int>(roundf(DUTY_MAX * constrain(ratio, 0.0f, 1.0f))));
 }
 
+void updateHardTempCutoff(const AppConfig& config, AppState& state) {
+  if (!state.altTempSensorOk || !isfinite(state.alternatorTempC)) {
+    state.alternatorOverTemp = false;
+    return;
+  }
+
+  const float cutoffC = max(config.hardCutoffTempC, config.derateStopTempC);
+  const float resetC = min(config.hardCutoffResetTempC, cutoffC - 1.0f);
+
+  if (!state.alternatorTempCutoffLatched && state.alternatorTempC >= cutoffC) {
+    state.alternatorTempCutoffLatched = true;
+    addLog("Alternator hard temp cutoff tripped", state.busVoltage, state.chargeCurrent, state.alternatorTempC);
+  } else if (state.alternatorTempCutoffLatched && state.alternatorTempC <= resetC) {
+    state.alternatorTempCutoffLatched = false;
+    addLog("Alternator hard temp cutoff cleared", state.busVoltage, state.chargeCurrent, state.alternatorTempC);
+  }
+
+  state.alternatorOverTemp = state.alternatorTempCutoffLatched;
+}
+
+
+void updateSocInhibit(const AppConfig& config, AppState& state) {
+  if (!config.socInhibitEnabled) {
+    if (state.socInhibitLatched) {
+      addLog("SOC inhibit disabled", state.busVoltage, state.chargeCurrent, state.alternatorTempC);
+    }
+    state.socInhibitLatched = false;
+    return;
+  }
+
+  if (!state.cerboSocValid || !isfinite(state.cerboSocPercent)) {
+    return;
+  }
+
+  const float highPct = constrain(config.socInhibitHighPercent, 0.0f, 100.0f);
+  const float lowPct = constrain(min(config.socInhibitLowPercent, highPct - 1.0f), 0.0f, 99.0f);
+
+  if (!state.socInhibitLatched && state.cerboSocPercent >= highPct) {
+    state.socInhibitLatched = true;
+    addLog("SOC inhibit tripped", state.busVoltage, state.chargeCurrent, state.alternatorTempC);
+  } else if (state.socInhibitLatched && state.cerboSocPercent <= lowPct) {
+    state.socInhibitLatched = false;
+    addLog("SOC inhibit cleared", state.busVoltage, state.chargeCurrent, state.alternatorTempC);
+  }
+}
+
 uint8_t softStartCap(const AppConfig& config, AppState& state) {
   if (config.softStartSeconds <= 0.0f) return DUTY_MAX;
 
@@ -117,6 +163,7 @@ void resetPid(AppState& state) {
   state.regulationStartMillis = 0;
   state.pidRequestedDuty = 0;
   state.tempDutyCap = DUTY_MAX;
+  state.hardTempDutyCap = DUTY_MAX;
   state.currentDutyCap = DUTY_MAX;
   state.softStartDutyCap = DUTY_MAX;
 }
@@ -160,12 +207,26 @@ void runControlLoop(const AppConfig& config, AppState& state) {
   }
 
   if (!state.altTempSensorOk) {
+    state.hardTempDutyCap = 0;
     disableField(state, "Alternator temp missing");
+    return;
+  }
+
+  updateHardTempCutoff(config, state);
+  state.hardTempDutyCap = state.alternatorTempCutoffLatched ? 0 : DUTY_MAX;
+  if (state.alternatorTempCutoffLatched) {
+    disableField(state, "Alternator hard temp cutoff");
     return;
   }
 
   if (!state.bmsAllowsCharge) {
     disableField(state, "BMS denied charge");
+    return;
+  }
+
+  updateSocInhibit(config, state);
+  if (state.socInhibitLatched) {
+    disableField(state, "SOC inhibit");
     return;
   }
 
@@ -191,7 +252,8 @@ void runControlLoop(const AppConfig& config, AppState& state) {
 
   state.requestedDuty = min(state.pidRequestedDuty,
                             min(state.currentDutyCap,
-                                min(state.tempDutyCap, state.softStartDutyCap)));
+                                min(state.tempDutyCap,
+                                    min(state.softStartDutyCap, state.hardTempDutyCap))));
 
   state.pwmDuty = applyFallLimit(state.pwmDuty, state.requestedDuty);
 

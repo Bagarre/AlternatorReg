@@ -4,13 +4,12 @@
 #include "wifi_manager.h"
 #include "control_loop.h"
 #include "sensors.h"
-
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 #include <ESP.h>
 
 String getStatusJson(const AppConfig& config, const AppState& state) {
-  StaticJsonDocument<1280> doc;
+  StaticJsonDocument<1600> doc;
   doc["voltage"] = state.busVoltage;
   if (isfinite(state.chargeCurrent)) doc["current"] = state.chargeCurrent; else doc["current"].set((const char*) nullptr);
   if (isfinite(state.shuntVoltageMV)) doc["shunt_mv"] = state.shuntVoltageMV; else doc["shunt_mv"].set((const char*) nullptr);
@@ -18,6 +17,9 @@ String getStatusJson(const AppConfig& config, const AppState& state) {
   doc["requested_pwm"] = state.requestedDuty;
   doc["pid_requested_pwm"] = state.pidRequestedDuty;
   doc["temp_duty_cap"] = state.tempDutyCap;
+  doc["hard_temp_duty_cap"] = state.hardTempDutyCap;
+  doc["hard_temp_cutoff_latched"] = state.alternatorTempCutoffLatched;
+  doc["alternator_over_temp"] = state.alternatorOverTemp;
   doc["current_duty_cap"] = state.currentDutyCap;
   doc["soft_start_duty_cap"] = state.softStartDutyCap;
   doc["pid_integral"] = state.pidIntegral;
@@ -38,10 +40,17 @@ String getStatusJson(const AppConfig& config, const AppState& state) {
   }
   doc["engine_room_temp_sensor_ok"] = state.engineRoomTempSensorOk;
   doc["rpm"] = state.currentRPM;
+  if (state.cerboSocValid && isfinite(state.cerboSocPercent)) doc["cerbo_soc"] = state.cerboSocPercent; else doc["cerbo_soc"].set((const char*) nullptr);
+  doc["cerbo_soc_valid"] = state.cerboSocValid;
+  doc["soc_inhibit_latched"] = state.socInhibitLatched;
+  if (state.lastSOCMillis == 0) doc["last_soc_ms_ago"].set((const char*) nullptr); else doc["last_soc_ms_ago"] = millis() - state.lastSOCMillis;
   doc["stage"] = state.stage;
   doc["can_status"] = state.canStatus;
-  if (state.lastCANMillis == 0) doc["last_can_ms_ago"].set((const char*) nullptr);
-  else doc["last_can_ms_ago"] = millis() - state.lastCANMillis;
+  if (state.lastCANMillis == 0) {
+    doc["last_can_ms_ago"].set((const char*) nullptr);
+  } else {
+    doc["last_can_ms_ago"] = millis() - state.lastCANMillis;
+  }
   doc["bms_permission"] = state.bmsAllowsCharge;
   doc["enabled"] = state.systemEnabled;
   doc["field_enabled"] = state.fieldEnabled;
@@ -60,17 +69,21 @@ String getStatusJson(const AppConfig& config, const AppState& state) {
   doc["pid_kd"] = config.pidKd;
   doc["derate_start_temp_c"] = config.derateStartTempC;
   doc["derate_stop_temp_c"] = config.derateStopTempC;
+  doc["hard_cutoff_temp_c"] = config.hardCutoffTempC;
+  doc["hard_cutoff_reset_temp_c"] = config.hardCutoffResetTempC;
+  doc["soc_inhibit_enabled"] = config.socInhibitEnabled;
+  doc["soc_inhibit_high_percent"] = config.socInhibitHighPercent;
+  doc["soc_inhibit_low_percent"] = config.socInhibitLowPercent;
   doc["soft_start_seconds"] = config.softStartSeconds;
   doc["min_start_rpm"] = config.minStartRPM;
   doc["rpm_hold_seconds"] = config.rpmHoldSeconds;
-
   String out;
   serializeJson(doc, out);
   return out;
 }
 
 String getConfigJson(const AppConfig& config) {
-  StaticJsonDocument<768> doc;
+  StaticJsonDocument<1024> doc;
   doc["targetVoltage"] = config.targetVoltage;
   doc["currentLimit"] = config.currentLimit;
   doc["pidKp"] = config.pidKp;
@@ -78,13 +91,17 @@ String getConfigJson(const AppConfig& config) {
   doc["pidKd"] = config.pidKd;
   doc["derateStartTemp"] = config.derateStartTempC;
   doc["derateStopTemp"] = config.derateStopTempC;
+  doc["hardCutoffTemp"] = config.hardCutoffTempC;
+  doc["hardCutoffResetTemp"] = config.hardCutoffResetTempC;
+  doc["socInhibitEnabled"] = config.socInhibitEnabled;
+  doc["socInhibitHighPercent"] = config.socInhibitHighPercent;
+  doc["socInhibitLowPercent"] = config.socInhibitLowPercent;
   doc["softStartSeconds"] = config.softStartSeconds;
   doc["minStartRPM"] = config.minStartRPM;
   doc["rpmHoldSeconds"] = config.rpmHoldSeconds;
   doc["canInput"] = config.canInput;
   doc["ssid"] = config.wifiSSID;
   doc["password"] = config.wifiPassword;
-
   String out;
   serializeJson(doc, out);
   return out;
@@ -99,6 +116,7 @@ static bool parseJsonBody(AsyncWebServerRequest* request, uint8_t* data, size_t 
   return true;
 }
 
+
 static const char* FALLBACK_INDEX_HTML = R"rawliteral(
 <!doctype html>
 <html>
@@ -108,23 +126,14 @@ static const char* FALLBACK_INDEX_HTML = R"rawliteral(
   <title>SVBC Alternator Regulator</title>
   <style>
     body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#eef2f7;color:#111827}
-    .wrap{max-width:720px;margin:0 auto;padding:20px}
-    .card{background:white;border-radius:18px;padding:18px;margin:14px 0;box-shadow:0 8px 24px rgba(0,0,0,.08)}
-    h1{font-size:24px;margin:0 0 6px}
-    .muted{color:#6b7280}
-    .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-    .val{font-size:26px;font-weight:700}
-    .bad{color:#dc2626}
-    .ok{color:#16a34a}
-    button{font-size:18px;padding:12px 18px;border:0;border-radius:12px;background:#2563eb;color:white}
-    .small{font-size:13px;color:#6b7280}
-    pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#d1d5db;padding:12px;border-radius:12px}
+    .wrap{max-width:720px;margin:0 auto;padding:20px}.card{background:white;border-radius:18px;padding:18px;margin:14px 0;box-shadow:0 8px 24px rgba(0,0,0,.08)}
+    h1{font-size:24px;margin:0 0 6px}.muted{color:#6b7280}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.val{font-size:26px;font-weight:700}.bad{color:#dc2626}.ok{color:#16a34a}
+    button{font-size:18px;padding:12px 18px;border:0;border-radius:12px;background:#2563eb;color:white}.small{font-size:13px;color:#6b7280}pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#d1d5db;padding:12px;border-radius:12px}
   </style>
 </head>
-<body>
-<div class="wrap">
+<body><div class="wrap">
   <h1>SVBC Alternator Regulator</h1>
-  <div class="muted">Embedded fallback UI. LittleFS did not provide /index.html.</div>
+  <div class="muted">Embedded fallback UI. Upload the <code>data/</code> filesystem to get the full UI.</div>
   <div class="card"><div id="status" class="muted">Loading status...</div></div>
   <div class="card"><button onclick="toggle()" id="btn">Toggle Enabled</button></div>
   <div class="card"><div class="small">Raw /api/status</div><pre id="raw"></pre></div>
@@ -149,37 +158,17 @@ async function load(){
     document.getElementById('raw').textContent=JSON.stringify(s,null,2);
   }catch(e){document.getElementById('status').textContent='Status API failed: '+e;}
 }
-async function toggle(){
-  if(!last) return;
-  await fetch('/api/enable',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:!last.enabled})});
-  load();
-}
+async function toggle(){if(!last) return; await fetch('/api/enable',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:!last.enabled})}); load();}
 setInterval(load,1000); load();
-</script>
-</body>
-</html>
+</script></body></html>
 )rawliteral";
-
-static void sendIndex(AsyncWebServerRequest* request) {
-  if (LittleFS.exists("/index.html")) {
-    request->send(LittleFS, "/index.html", "text/html");
-  } else {
-    request->send(200, "text/html", FALLBACK_INDEX_HTML);
-  }
-}
 
 void setupWebServer(AsyncWebServer& server, AppConfig& config, AppState& state) {
   const bool fsOk = LittleFS.begin(true);
-
   if (!fsOk) {
-    Serial.println("LittleFS mount failed; using embedded fallback UI");
     addLog("LittleFS mount failed; using embedded fallback UI");
-  } else {
-    Serial.println("LittleFS mounted");
-    Serial.print("LittleFS /index.html exists: ");
-    Serial.println(LittleFS.exists("/index.html") ? "YES" : "NO");
-    addLog(LittleFS.exists("/index.html") ? "LittleFS index.html found" : "LittleFS index.html missing; using fallback UI");
   }
+
 
   server.on("/api/status", HTTP_GET, [&](AsyncWebServerRequest* request) {
     request->send(200, "application/json", getStatusJson(config, state));
@@ -191,8 +180,10 @@ void setupWebServer(AsyncWebServer& server, AppConfig& config, AppState& state) 
 
   server.on("/api/config", HTTP_POST, [](AsyncWebServerRequest* request) {}, nullptr,
     [&](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t, size_t) {
-      StaticJsonDocument<768> doc;
-      if (!parseJsonBody(request, data, len, doc)) return;
+      StaticJsonDocument<1024> doc;
+      if (!parseJsonBody(request, data, len, doc)) {
+        return;
+      }
 
       config.targetVoltage = doc["targetVoltage"] | config.targetVoltage;
       config.currentLimit  = doc["currentLimit"]  | config.currentLimit;
@@ -201,10 +192,15 @@ void setupWebServer(AsyncWebServer& server, AppConfig& config, AppState& state) 
       config.pidKd         = doc["pidKd"]         | config.pidKd;
       config.derateStartTempC = doc["derateStartTemp"] | config.derateStartTempC;
       config.derateStopTempC  = doc["derateStopTemp"]  | config.derateStopTempC;
+      config.hardCutoffTempC = doc["hardCutoffTemp"] | config.hardCutoffTempC;
+      config.hardCutoffResetTempC = doc["hardCutoffResetTemp"] | config.hardCutoffResetTempC;
+      config.socInhibitEnabled = doc["socInhibitEnabled"] | config.socInhibitEnabled;
+      config.socInhibitHighPercent = doc["socInhibitHighPercent"] | config.socInhibitHighPercent;
+      config.socInhibitLowPercent = doc["socInhibitLowPercent"] | config.socInhibitLowPercent;
       config.softStartSeconds = doc["softStartSeconds"] | config.softStartSeconds;
       config.minStartRPM      = doc["minStartRPM"]      | config.minStartRPM;
       config.rpmHoldSeconds   = doc["rpmHoldSeconds"]   | config.rpmHoldSeconds;
-      config.canInput         = doc["canInput"]         | config.canInput;
+      config.canInput      = doc["canInput"]      | config.canInput;
 
       saveConfig(config);
       request->send(200, "application/json", "{\"status\":\"saved\"}");
@@ -221,7 +217,9 @@ void setupWebServer(AsyncWebServer& server, AppConfig& config, AppState& state) 
   server.on("/api/enable", HTTP_POST, [](AsyncWebServerRequest* request) {}, nullptr,
     [&](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t, size_t) {
       StaticJsonDocument<128> doc;
-      if (!parseJsonBody(request, data, len, doc)) return;
+      if (!parseJsonBody(request, data, len, doc)) {
+        return;
+      }
 
       state.systemEnabled = doc["enabled"] | state.systemEnabled;
       if (!state.systemEnabled) {
@@ -237,7 +235,9 @@ void setupWebServer(AsyncWebServer& server, AppConfig& config, AppState& state) 
   server.on("/api/network", HTTP_POST, [](AsyncWebServerRequest* request) {}, nullptr,
     [&](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t, size_t) {
       StaticJsonDocument<256> doc;
-      if (!parseJsonBody(request, data, len, doc)) return;
+      if (!parseJsonBody(request, data, len, doc)) {
+        return;
+      }
 
       config.wifiSSID = String(static_cast<const char*>(doc["wifiSSID"] | ""));
       config.wifiPassword = String(static_cast<const char*>(doc["wifiPassword"] | ""));
@@ -262,17 +262,25 @@ void setupWebServer(AsyncWebServer& server, AppConfig& config, AppState& state) 
   });
 
   server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
-    sendIndex(request);
+    if (LittleFS.exists("/index.html")) {
+      request->send(LittleFS, "/index.html", "text/html");
+    } else {
+      request->send(200, "text/html", FALLBACK_INDEX_HTML);
+    }
   });
 
   server.on("/index.html", HTTP_GET, [](AsyncWebServerRequest* request) {
-    sendIndex(request);
+    if (LittleFS.exists("/index.html")) {
+      request->send(LittleFS, "/index.html", "text/html");
+    } else {
+      request->send(200, "text/html", FALLBACK_INDEX_HTML);
+    }
   });
 
   server.serveStatic("/", LittleFS, "/");
 
   server.onNotFound([](AsyncWebServerRequest* request) {
-    request->send(404, "text/plain", "Not found. If this is a UI asset, upload the LittleFS data filesystem from the data/ folder.");
+    request->send(404, "text/plain", "Not found. If this is a UI asset, upload the sketch data filesystem from the data/ folder.");
   });
 
   server.begin();
