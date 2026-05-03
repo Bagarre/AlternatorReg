@@ -22,7 +22,7 @@ public:
   explicit INA226Simple(uint8_t address) : addr(address) {}
 
   bool begin() {
-    Wire.begin();
+    Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
     // AVG=16 samples, VBUSCT=1.1ms, VSHCT=1.1ms, mode=shunt+bus continuous.
     writeRegister16(0x00, 0x4527);
     delay(5);
@@ -91,7 +91,7 @@ bool validDs18b20Temp(float tempC) {
 void initSensors(AppState& state) {
   pinMode(MAINTENANCE_MODE_PIN, INPUT_PULLUP);
 
-  Wire.begin();
+  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
   state.ina226Available = ina226.begin();
 
   tempSensors.begin();

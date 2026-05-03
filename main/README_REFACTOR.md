@@ -1,321 +1,368 @@
-# Alternator Regulator Refactor Notes
+# SVBC Alternator Regulator — ESP32 DevKit V1 + INA226 + TJA1051T/3
 
-This project is the ESP32 alternator regulator web UI/controller intended to replace the basic behavior needed from a Wakespeed-style regulator while remaining locally inspectable and hackable.
+## Purpose
 
-## Current Architecture
+This project is a custom ESP32-based alternator regulator intended to replace a Wakespeed WS500-style external regulator.
 
-The controller now uses:
+It controls alternator field current with PWM, while using measured bus voltage, alternator current, alternator case temperature, engine-room ambient temperature, RPM/CAN status, and safety limits.
 
-- **INA226** for charge voltage, shunt voltage, and alternator/output current.
-- **DS18B20 3-wire digital temperature sensors** for alternator case temperature and engine-room ambient temperature.
-- **PWM field control** through the field driver output.
-- **CAN/N2K input** for RPM/BMS/DCVV-style upstream control data.
-- **Web UI + JSON API** for status, tuning, and network configuration.
-- **Python simulator** for exercising the web UI without the ESP32 hardware.
+The Victron Cerbo/DCVV system is expected to own charging policy. This regulator executes control and safety limits; it does **not** implement bulk/absorb/float charging stages locally.
 
-The old voltage-divider measurement path has been removed. Voltage feedback for regulation comes from the INA226 bus-voltage reading.
+## Current hardware target
 
-## What This Controller Does Not Do
+Primary target board:
 
-It does **not** run its own bulk/absorb/float charge stages. Charge target selection should be owned by DCVV/Cerbo/BMS logic. This regulator simply tries to regulate field output to the current requested target voltage/current limits while obeying RPM, temperature, and permission constraints.
+- **ESP32 DevKit V1**
+- **TJA1051T/3 CAN transceiver** for NMEA2000/TWAI
+- **INA226** for voltage/current measurement
+- **2x DS18B20** 3-wire digital temperature probes
+- **IRLZ44N** or equivalent logic-level MOSFET for alternator field control
+- **SR560** Schottky diode across the alternator field coil
+- **MPM3610** buck regulator for power
 
-## Control Logic
+## Why ESP32 DevKit V1
 
-The regulator loop now includes:
+The DevKit V1 has more usable GPIO than a compact XIAO ESP32S3 and is easier to wire, debug, and repair. For a one-off marine controller, that matters more than board size.
 
-### PID Voltage Regulation
+## Main functions
 
-The field request is based on PID error between:
+- Read voltage and current from INA226
+- Read alternator case and ambient temperatures from DS18B20 probes
+- Control alternator field with PWM through a low-side MOSFET
+- Apply PID voltage regulation
+- Apply temperature derating
+- Apply hard alternator temperature cutoff with hysteresis
+- Apply soft-start ramp
+- Require RPM above threshold for a configured hold time before enabling field
+- Disable field when Cerbo SOC is above configured threshold, and re-enable below lower threshold
+- Expose status/config through the ESP32 web UI
+- Run fallback WiFi AP if no configured WiFi connects
+- Listen for NMEA2000/TWAI traffic through TJA1051T/3
 
-```text
-configured / externally supplied target voltage - INA226 bus voltage
-```
+## GPIO pin map
 
-Tunable values:
+Defined in `pins.h`.
 
-```text
-PID Kp
-PID Ki
-PID Kd
-```
+| Role | ESP32 GPIO | Notes |
+|---|---:|---|
+| Field PWM output | GPIO25 | Drives MOSFET gate through resistor |
+| DS18B20 OneWire data | GPIO26 | Both temperature probes share this bus |
+| Maintenance mode switch | GPIO27 | DIP switch to GND enables verbose serial logging |
+| INA226 I2C SDA | GPIO21 | ESP32 default SDA |
+| INA226 I2C SCL | GPIO22 | ESP32 default SCL |
+| CAN/TWAI TX | GPIO5 | Connect to TJA1051 TXD |
+| CAN/TWAI RX | GPIO4 | Connect to TJA1051 RXD |
 
-Start conservative. Too much gain will cause hunting.
+Important: CAN was intentionally moved off GPIO21/22 so it does not conflict with INA226 I2C.
 
-### Temperature Derating Curve
+## TJA1051T/3 CAN transceiver wiring
 
-Alternator case temperature derates field output linearly:
+The TJA1051T/3 is the preferred transceiver over TJA1050 because it is compatible with 3.3V ESP32 logic.
 
-```text
-below Derate Start Temp  -> 100% duty cap
-between start and stop   -> linear reduction
-at/above Derate Stop Temp -> 0% duty cap
-```
-
-This is intentionally a curve, not a single cutoff.
-
-### Soft Start Ramp
-
-Once all enable conditions are satisfied, field output is capped by a soft-start ramp:
-
-```text
-0% -> 100% over Soft Start Seconds
-```
-
-This avoids slamming the belt/alternator immediately after the RPM gate clears.
-
-### RPM Start Gate
-
-The alternator will not begin regulation until engine RPM has been at or above the configured threshold for the configured hold time.
-
-Defaults:
+Typical wiring:
 
 ```text
-Minimum Start RPM: 2200
-RPM Hold Time: 300 seconds / 5 minutes
+ESP32 GPIO5  -> TJA1051 TXD
+ESP32 GPIO4  -> TJA1051 RXD
+ESP32 GND    -> TJA1051 GND
+TJA1051 CANH -> NMEA2000 CAN-H
+TJA1051 CANL -> NMEA2000 CAN-L
+TJA1051 STB  -> GND for normal operation
 ```
 
-If RPM drops below the threshold, the hold timer and soft-start timer reset.
+Check your module pin labels. Some modules expose `STB`, `S`, or `EN`. For a standard TJA1051 standby pin, tie it LOW/GND for normal operation.
 
-### Safety Stops
+Only install a 120 ohm CAN termination resistor if this node is at the physical end of the backbone and the backbone is not already properly terminated. A normal NMEA2000 backbone already has two terminators, one at each end.
 
-Field output is disabled if:
+## INA226 wiring
+
+The INA226 measures both bus voltage and shunt voltage/current. The old voltage-divider method should not be used.
 
 ```text
-system disabled
-INA226 missing
-alternator case temp sensor missing
-BMS denies charge
-CAN required but timed out
-RPM holdoff not satisfied
-voltage unavailable
+ESP32 3.3V  -> INA226 VCC
+ESP32 GND   -> INA226 GND
+ESP32 GPIO21 -> INA226 SDA
+ESP32 GPIO22 -> INA226 SCL
 ```
 
-## Wiring Summary
-
-### INA226
+Shunt wiring:
 
 ```text
-ESP32 3.3V -> INA226 VCC
-ESP32 GND  -> INA226 GND
-ESP32 SDA  -> INA226 SDA
-ESP32 SCL  -> INA226 SCL
-
-INA226 VIN+ -> battery/alternator side of shunt
-INA226 VIN- -> load/battery side of shunt
+Battery negative / bus side ----[ SHUNT ]---- alternator/load side
+INA226 IN+ -> battery/bus side of shunt
+INA226 IN- -> alternator/load side of shunt
 ```
 
-Keep the shunt sense leads short and twisted. The regulator should live near the shunt.
+Use short Kelvin sense leads from the shunt sense screws. Twisted pair is recommended.
 
-### DS18B20 Sensors
-
-Both sensors share the OneWire bus.
+Default shunt assumption:
 
 ```text
-DS18B20 red/yellow/black typical wiring:
-Red    -> 3.3V
-Black  -> GND
-Yellow -> DATA
-
-DATA -> 4.7k pullup -> 3.3V
+500A / 50mV shunt = 0.0001 ohm
 ```
 
-Project default:
+This is defined in `sensors.cpp` as `SHUNT_RESISTANCE_OHM`.
+
+## DS18B20 temperature wiring
+
+Both DS18B20 probes share one OneWire bus.
 
 ```text
-OneWire pin: see pins.h
-Index 0: alternator case temperature
-Index 1: engine room ambient temperature
+DS18B20 VCC  -> 3.3V
+DS18B20 GND  -> GND
+DS18B20 DATA -> GPIO26
+4.7k resistor from DATA to 3.3V
 ```
 
-A 15 ft DS18B20 run is fine if wired cleanly. Use 3-wire mode, not parasitic power. Keep the cable away from alternator output and starter wiring where practical.
-
-### Maintenance Mode
-
-A DIP switch can pull the maintenance GPIO low. When low, the controller prints verbose status over USB serial.
+Sensor index convention:
 
 ```text
-open = normal quiet mode
-closed to GND = verbose maintenance mode
+Index 0 = alternator case temperature
+Index 1 = engine room ambient temperature
 ```
 
-## JSON API
+For long engine-room runs, use 3-wire mode, not parasite power. 15 ft is acceptable if routed cleanly. Keep DS18B20 wiring away from alternator output and starter cables.
 
-### `GET /api/status`
-
-Important fields:
-
-```json
-{
-  "voltage": 14.21,
-  "current": 52.3,
-  "shunt_mv": 5.23,
-  "pwm": 71,
-  "requested_pwm": 74,
-  "pid_requested_pwm": 90,
-  "temp_duty_cap": 255,
-  "current_duty_cap": 255,
-  "soft_start_duty_cap": 180,
-  "alt_temp_c": 68.2,
-  "engine_room_temp_c": 38.4,
-  "rpm": 2400,
-  "stage": "Regulating",
-  "can_status": "OK",
-  "bms_permission": true,
-  "enabled": true,
-  "field_enabled": true,
-  "ina226_available": true,
-  "startup_check_ok": true,
-  "last_disable_reason": "None",
-  "target_voltage": 14.4,
-  "current_limit": 100,
-  "pid_kp": 45,
-  "pid_ki": 4,
-  "pid_kd": 0,
-  "derate_start_temp_c": 82,
-  "derate_stop_temp_c": 96,
-  "soft_start_seconds": 60,
-  "min_start_rpm": 2200,
-  "rpm_hold_seconds": 300
-}
-```
-
-### `GET /api/config`
-
-Returns the editable configuration.
-
-### `POST /api/config`
-
-Accepts:
-
-```json
-{
-  "targetVoltage": 14.4,
-  "currentLimit": 100,
-  "pidKp": 45,
-  "pidKi": 4,
-  "pidKd": 0,
-  "derateStartTemp": 82,
-  "derateStopTemp": 96,
-  "softStartSeconds": 60,
-  "minStartRPM": 2200,
-  "rpmHoldSeconds": 300,
-  "canInput": true
-}
-```
-
-## Simulator
-
-Run:
-
-```bash
-python3 sim_web_ui.py
-```
-
-Open:
+Invalid DS18B20 values are treated as missing/faulted:
 
 ```text
-http://127.0.0.1:8765/
+-127°C = disconnected
+85°C   = power-on/default conversion value, ignored
 ```
 
-The simulator serves the same web files and API shape as the ESP32 so the UI can be exercised without hardware.
+## Field control hardware
 
+The regulator uses low-side MOSFET field control.
 
-## Wi-Fi / Web UI notes
+```text
+Switched +12V -> Alternator Field+
+Alternator Field- -> MOSFET Drain
+MOSFET Source -> Ground
+```
 
-Default fallback access point:
+Gate network:
+
+```text
+ESP32 GPIO25 -> 100 ohm resistor -> MOSFET Gate
+MOSFET Gate -> 10k resistor -> Ground
+```
+
+Flyback diode across the field coil:
+
+```text
+SR560 cathode/stripe -> Field+
+SR560 anode          -> MOSFET drain / Field-
+```
+
+MOSFET recommendation:
+
+- IRLZ44N is acceptable and available
+- IRLB3034 or similar lower-Rds MOSFET is better if buying parts
+
+MOSFET mounting warning:
+
+- TO-220 tab is usually connected to Drain
+- Do not bolt the tab directly to the aluminum case unless using an insulating thermal pad and shoulder washer
+
+## Power
+
+Use the MPM3610 or similar buck converter to power the ESP32 from boat 12V.
+
+Recommended:
+
+```text
+12V input -> small fuse -> MPM3610 -> ESP32 VIN/5V
+GND common between ESP32, INA226, field driver, alternator/battery negative, and CAN transceiver
+```
+
+Recommended capacitors:
+
+- 100uF electrolytic on 12V input
+- 0.1uF ceramic near power input
+- 10uF + 0.1uF near INA226 if wiring is noisy
+
+Recommended protection:
+
+- TVS diode such as SMBJ24A on 12V input
+
+## Startup check routine
+
+On boot the firmware performs a one-time startup check and prints clear serial output.
+
+Checks:
+
+- INA226 voltage/current monitor present
+- Alternator DS18B20 case temperature valid
+- Engine-room DS18B20 ambient temperature valid
+- N2K/CAN traffic present, if `canInput` is enabled
+
+Example failure output:
+
+```text
+=== Alternator Regulator Startup Check ===
+Checking INA226 voltage/current monitor... ERROR / not present
+Checking alternator DS18B20 case temp... ERROR / not present
+Checking engine room DS18B20 ambient temp... ERROR / not present
+Checking N2K/CAN input... ERROR / not present
+------------------------------------------
+System check complete: unable to continue normal regulation.
+Maintenance mode: disabled.
+==========================================
+```
+
+The startup check is intentionally quiet after initial report unless maintenance mode is enabled.
+
+## Maintenance mode
+
+GPIO27 uses `INPUT_PULLUP`.
+
+```text
+DIP switch open        = normal quiet mode
+DIP switch to GND      = maintenance / verbose serial logging
+```
+
+Use this when the case is open and a laptop is plugged into USB.
+
+## NMEA2000 / CAN usage currently
+
+The code uses ESP32 TWAI directly through `driver/twai.h`.
+
+Current N2K functions:
+
+- Detect bus traffic for startup sanity checks
+- Read engine RPM from PGN `127488` where available
+- Read battery SOC from PGN `127506` for Cerbo SOC inhibit
+
+SOC inhibit logic:
+
+- Default enabled
+- Disable field at or above 95% SOC
+- Re-enable only at or below 90% SOC
+- Uses hysteresis to prevent rapid cycling
+
+This is a protective fallback. Long term, proper Cerbo/DCVV control should provide voltage target/current limit/charge permission explicitly.
+
+## Web UI
+
+Fallback AP defaults:
 
 ```text
 SSID: SVBC_Alternator
 Password: Nitt4agm2
-URL: http://192.168.4.1/
 ```
 
-The firmware now includes a small embedded fallback page at `/`, so the root page should not 404 even if the filesystem has not been uploaded. For the full phone-friendly UI, upload the contents of the `data/` folder to SPIFFS/LittleFS using the Arduino ESP32 filesystem uploader.
+The UI is served from `data/` uploaded to the ESP32 filesystem. If the filesystem page is missing, the firmware includes a fallback page.
 
-If `/api/status` works but CSS/JS/image files return 404, the sketch is running correctly but the filesystem data has not been uploaded.
-
-## Hard Alternator Temperature Cutoff
-
-In addition to the normal linear thermal derating curve, the control loop now has a latched hard cutoff:
-
-- `hardCutoffTempC` default: 105°C
-- `hardCutoffResetTempC` default: 95°C
-
-If alternator case temperature reaches the cutoff, field output is forced to zero and the field remains disabled until the temperature falls below the reset threshold. This prevents rapid on/off flapping around the cutoff point.
-
-If the alternator temperature sensor is missing or invalid, field output is also forced off. DS18B20 invalid readings such as `85°C` and `-127°C` should be treated as sensor failures.
-
-The web API exposes:
-
-- `hard_temp_cutoff_latched`
-- `alternator_over_temp`
-- `hard_temp_duty_cap`
-- `hard_cutoff_temp_c`
-- `hard_cutoff_reset_temp_c`
-
-The web settings API accepts:
-
-- `hardCutoffTemp`
-- `hardCutoffResetTemp`
-
-## Cerbo SOC Inhibit
-
-The controller can optionally inhibit alternator field output based on battery SOC received from the Cerbo/GX over NMEA2000/CAN.
-
-Default behavior:
+Common endpoints:
 
 ```text
-SOC inhibit enabled: yes
-Disable field at or above: 95%
-Re-enable field at or below: 90%
+GET  /api/status
+GET  /api/config
+POST /api/config
+GET  /api/enable
+POST /api/enable
+GET  /api/log
+POST /api/network
+POST /api/network/reset
+POST /api/reboot
 ```
 
-This is not a charge-stage controller. The Cerbo/DCVV system still owns charging policy. This feature is only a safety/anti-overcharge guard that prevents the alternator from continuing to push current into an already-full bank.
+## Web UI organization
 
-### CAN Source
+The UI is organized like the charger-control UI:
 
-The firmware listens for:
+1. Operational data at top
+2. Settings below
+3. Network settings
+4. Verbose/debug/raw status at bottom
+
+## Config persistence
+
+Configuration is stored in ESP32 flash through the config store.
+
+Expected persistent settings include:
+
+- Target voltage
+- Current limit
+- PID constants
+- Derate start/stop temps
+- Hard cutoff/reset temps
+- Soft-start seconds
+- Min start RPM
+- RPM hold seconds
+- SOC inhibit enable/high/low thresholds
+- CAN input enable
+- WiFi credentials
+
+Runtime state does not persist, including:
+
+- Field enabled state
+- PID integral
+- active latches/faults
+- CAN online state
+
+## Safety behavior
+
+Field is forced off if:
+
+- INA226 is missing or invalid
+- Startup check fails
+- System is disabled
+- Alternator temperature sensor fails
+- Alternator hard temperature cutoff is latched
+- Cerbo SOC inhibit is latched
+- Required RPM gate has not been satisfied
+
+## Temperature behavior
+
+Derating:
+
+- Reduces field output linearly between configured derate start/stop temperatures
+
+Hard cutoff:
+
+- Forces field off at configured hard cutoff temperature
+- Re-enables only after alternator temp falls below reset temperature
+
+This prevents chatter near the cutoff threshold.
+
+## Bench testing notes
+
+Minimum useful bench setup:
+
+- ESP32 DevKit V1
+- INA226 connected over I2C
+- DS18B20 probes connected to GPIO26
+- MOSFET output driving LED/test load instead of real alternator field
+- Serial monitor open at 115200
+- Web UI open through fallback AP or configured WiFi
+
+Before alternator testing, verify:
+
+- INA226 reports realistic bus voltage
+- Current reads near zero at rest
+- DS18B20 sensors report sane values
+- Removing a temp sensor causes fault/warning
+- Field PWM goes to zero when INA is missing
+- Field PWM goes to zero on hard temp cutoff
+- SOC inhibit latches/re-enables correctly when simulated
+
+## Known next steps
+
+- Tune PID gains on the actual alternator
+- Verify field PWM frequency and MOSFET heating under real field load
+- Verify RPM PGN parsing from the actual engine/Cerbo/N2K source
+- Decide whether to implement explicit Cerbo/DCVV voltage/current/permission control instead of SOC-only fallback
+- Add proper sensor addressing for DS18B20 if probe order ever swaps
+
+## Current board support summary
+
+This package is now configured for:
 
 ```text
-PGN 127506 - DC Detailed Status
+Board: ESP32 DevKit V1
+CAN: external TJA1051T/3 transceiver
+Current/Voltage: INA226 over I2C
+Temps: DS18B20 OneWire
+Field: MOSFET low-side PWM
 ```
-
-The firmware reads State of Charge from byte 3 when the value is 0-100. Values outside that range are ignored as unavailable/invalid.
-
-### Runtime Behavior
-
-When SOC inhibit is enabled:
-
-```text
-SOC >= high threshold -> latch SOC inhibit and disable field
-SOC <= low threshold  -> clear SOC inhibit and allow regulation again
-```
-
-The latch prevents rapid on/off cycling near the threshold.
-
-If SOC data is not available, the SOC inhibit does not trip. Other safety checks still apply: INA226 presence, alternator temp, CAN/RPM requirement, current limit, and hard temp cutoff.
-
-### Web UI / API Fields
-
-`GET /api/status` includes:
-
-```json
-{
-  "cerbo_soc": 94,
-  "cerbo_soc_valid": true,
-  "soc_inhibit_latched": false,
-  "last_soc_ms_ago": 250
-}
-```
-
-`GET /api/config` includes:
-
-```json
-{
-  "socInhibitEnabled": true,
-  "socInhibitHighPercent": 95,
-  "socInhibitLowPercent": 90
-}
-```
-
-`POST /api/config` accepts those same fields.
