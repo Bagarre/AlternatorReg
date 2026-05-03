@@ -38,11 +38,19 @@
       <div class="kv-grid" id="statusGrid">
         <div>Voltage</div><div id="voltage">—</div>
         <div>Current</div><div id="current">—</div>
+        <div>Shunt mV</div><div id="shunt_mv">—</div>
         <div>Field PWM</div><div id="field_pwm">—</div>
         <div>Requested PWM</div><div id="requested_pwm">—</div>
+        <div>PID Request</div><div id="pid_requested_pwm">—</div>
+        <div>Temp Cap</div><div id="temp_duty_cap">—</div>
+        <div>Current Cap</div><div id="current_duty_cap">—</div>
+        <div>Soft Start Cap</div><div id="soft_start_duty_cap">—</div>
         <div>Alternator Temp</div><div id="alt_temp">—</div>
+        <div>Engine Room Temp</div><div id="engine_room_temp">—</div>
         <div>RPM</div><div id="rpm">—</div>
         <div>Stage</div><div id="stage">—</div>
+        <div>Startup Check</div><div id="startup_status">—</div>
+        <div>INA226</div><div id="ina226_status">—</div>
         <div>CAN Status</div><div id="can_status">—</div>
         <div>Last CAN</div><div id="last_can">—</div>
         <div>BMS Permission</div><div id="bms_permission">—</div>
@@ -69,13 +77,43 @@
         </label>
 
         <label>
-          <span>Float Voltage</span>
-          <input type="number" step="0.1" id="floatVoltage" />
+          <span>PID Kp</span>
+          <input type="number" step="0.1" id="pidKp" />
         </label>
 
         <label>
-          <span>Derate Temp (°C)</span>
-          <input type="number" step="0.1" id="derateTemp" />
+          <span>PID Ki</span>
+          <input type="number" step="0.1" id="pidKi" />
+        </label>
+
+        <label>
+          <span>PID Kd</span>
+          <input type="number" step="0.1" id="pidKd" />
+        </label>
+
+        <label>
+          <span>Derate Start Temp (°C)</span>
+          <input type="number" step="0.1" id="derateStartTemp" />
+        </label>
+
+        <label>
+          <span>Derate Stop Temp (°C)</span>
+          <input type="number" step="0.1" id="derateStopTemp" />
+        </label>
+
+        <label>
+          <span>Soft Start (seconds)</span>
+          <input type="number" step="1" id="softStartSeconds" />
+        </label>
+
+        <label>
+          <span>Minimum Start RPM</span>
+          <input type="number" step="50" id="minStartRPM" />
+        </label>
+
+        <label>
+          <span>RPM Hold Time (seconds)</span>
+          <input type="number" step="10" id="rpmHoldSeconds" />
         </label>
 
         <label class="checkbox-row">

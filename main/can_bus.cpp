@@ -9,6 +9,8 @@ namespace {
 constexpr uint32_t PGN_ENGINE_PARAMETERS_RAPID = 127488;
 constexpr unsigned long CAN_TIMEOUT_MS = 3000;
 
+bool driverStarted = false;
+
 uint32_t extractPGN(uint32_t canId) {
   const uint8_t pf = (canId >> 16) & 0xFF;
   const uint8_t ps = (canId >> 8) & 0xFF;
@@ -34,10 +36,12 @@ void setupCAN(AppState& state) {
 
   if (twai_driver_install(&g_config, &t_config, &f_config) == ESP_OK &&
       twai_start() == ESP_OK) {
-    state.canStatus = "OK";
-    state.canOnline = true;
-    addLog("CAN online");
+    driverStarted = true;
+    state.canStatus = "Waiting for traffic";
+    state.canOnline = false;
+    addLog("CAN driver started");
   } else {
+    driverStarted = false;
     state.canStatus = "Init failed";
     state.canOnline = false;
     addLog("CAN init failed");
@@ -45,6 +49,12 @@ void setupCAN(AppState& state) {
 }
 
 void processCANMessages(const AppConfig& config, AppState& state) {
+  if (!driverStarted) {
+    state.canOnline = false;
+    state.canStatus = "Init failed";
+    return;
+  }
+
   twai_message_t message;
   while (twai_receive(&message, 0) == ESP_OK) {
     state.lastCANMillis = millis();
@@ -62,7 +72,23 @@ void processCANMessages(const AppConfig& config, AppState& state) {
     }
   }
 
-  if (config.canInput && state.lastCANMillis > 0 && millis() - state.lastCANMillis > CAN_TIMEOUT_MS) {
+  if (!config.canInput) {
+    state.canOnline = true;
+    state.canStatus = "Ignored";
+    return;
+  }
+
+  // For startup checks, driver-init alone is not enough. We want proof that the
+  // N2K side is actually alive, so require recent traffic.
+  if (state.lastCANMillis == 0) {
+    if (millis() - state.bootMillis > CAN_TIMEOUT_MS) {
+      state.canOnline = false;
+      state.canStatus = "No traffic";
+    }
+    return;
+  }
+
+  if (millis() - state.lastCANMillis > CAN_TIMEOUT_MS) {
     state.canStatus = "Timeout";
     state.canOnline = false;
   }

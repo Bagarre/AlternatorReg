@@ -11,11 +11,19 @@ const api = {
 const el = {
   voltage: document.getElementById("voltage"),
   current: document.getElementById("current"),
+  shunt_mv: document.getElementById("shunt_mv"),
   field_pwm: document.getElementById("field_pwm"),
   requested_pwm: document.getElementById("requested_pwm"),
+  pid_requested_pwm: document.getElementById("pid_requested_pwm"),
+  temp_duty_cap: document.getElementById("temp_duty_cap"),
+  current_duty_cap: document.getElementById("current_duty_cap"),
+  soft_start_duty_cap: document.getElementById("soft_start_duty_cap"),
   alt_temp: document.getElementById("alt_temp"),
+  engine_room_temp: document.getElementById("engine_room_temp"),
   rpm: document.getElementById("rpm"),
   stage: document.getElementById("stage"),
+  startup_status: document.getElementById("startup_status"),
+  ina226_status: document.getElementById("ina226_status"),
   can_status: document.getElementById("can_status"),
   last_can: document.getElementById("last_can"),
   bms_permission: document.getElementById("bms_permission"),
@@ -26,8 +34,14 @@ const el = {
   networkSummary: document.getElementById("networkSummary"),
   targetVoltage: document.getElementById("targetVoltage"),
   currentLimit: document.getElementById("currentLimit"),
-  floatVoltage: document.getElementById("floatVoltage"),
-  derateTemp: document.getElementById("derateTemp"),
+  pidKp: document.getElementById("pidKp"),
+  pidKi: document.getElementById("pidKi"),
+  pidKd: document.getElementById("pidKd"),
+  derateStartTemp: document.getElementById("derateStartTemp"),
+  derateStopTemp: document.getElementById("derateStopTemp"),
+  softStartSeconds: document.getElementById("softStartSeconds"),
+  minStartRPM: document.getElementById("minStartRPM"),
+  rpmHoldSeconds: document.getElementById("rpmHoldSeconds"),
   canInput: document.getElementById("canInput"),
   ssid: document.getElementById("ssid"),
   password: document.getElementById("password"),
@@ -81,11 +95,19 @@ function formatMsAgo(ms) {
 function renderStatus(data) {
   el.voltage.textContent = formatVolts(data.voltage);
   el.current.textContent = formatAmps(data.current);
+  el.shunt_mv.textContent = data.shunt_mv == null ? "—" : `${Number(data.shunt_mv).toFixed(4)} mV`;
   el.field_pwm.textContent = `${data.pwm ?? 0}`;
   el.requested_pwm.textContent = `${data.requested_pwm ?? 0}`;
+  el.pid_requested_pwm.textContent = `${data.pid_requested_pwm ?? 0}`;
+  el.temp_duty_cap.textContent = `${data.temp_duty_cap ?? 0}`;
+  el.current_duty_cap.textContent = `${data.current_duty_cap ?? 0}`;
+  el.soft_start_duty_cap.textContent = `${data.soft_start_duty_cap ?? 0}`;
   el.alt_temp.textContent = formatTemp(data.alt_temp_c, data.alt_temp_f);
+  el.engine_room_temp.textContent = formatTemp(data.engine_room_temp_c, data.engine_room_temp_f);
   el.rpm.textContent = data.rpm == null ? "—" : `${Number(data.rpm).toFixed(0)}`;
   el.stage.textContent = data.stage || "—";
+  el.startup_status.textContent = data.startup_status || (data.startup_check_ok ? "OK" : "Fault");
+  el.ina226_status.textContent = data.ina226_available ? "OK" : "Missing";
   el.can_status.textContent = data.can_status || "—";
   el.last_can.textContent = formatMsAgo(data.last_can_ms_ago);
   el.bms_permission.textContent = data.bms_permission ? "Allowed" : "Blocked";
@@ -100,8 +122,14 @@ function renderStatus(data) {
 function renderConfig(data) {
   el.targetVoltage.value = data.targetVoltage ?? "";
   el.currentLimit.value = data.currentLimit ?? "";
-  el.floatVoltage.value = data.floatVoltage ?? "";
-  el.derateTemp.value = data.derateTemp ?? "";
+  el.pidKp.value = data.pidKp ?? "";
+  el.pidKi.value = data.pidKi ?? "";
+  el.pidKd.value = data.pidKd ?? "";
+  el.derateStartTemp.value = data.derateStartTemp ?? "";
+  el.derateStopTemp.value = data.derateStopTemp ?? "";
+  el.softStartSeconds.value = data.softStartSeconds ?? "";
+  el.minStartRPM.value = data.minStartRPM ?? "";
+  el.rpmHoldSeconds.value = data.rpmHoldSeconds ?? "";
   el.canInput.checked = !!data.canInput;
   el.ssid.value = data.ssid ?? "";
   el.password.value = data.password ?? "";
@@ -140,8 +168,14 @@ async function saveConfig() {
     body: JSON.stringify({
       targetVoltage: Number(el.targetVoltage.value),
       currentLimit: Number(el.currentLimit.value),
-      floatVoltage: Number(el.floatVoltage.value),
-      derateTemp: Number(el.derateTemp.value),
+      pidKp: Number(el.pidKp.value),
+      pidKi: Number(el.pidKi.value),
+      pidKd: Number(el.pidKd.value),
+      derateStartTemp: Number(el.derateStartTemp.value),
+      derateStopTemp: Number(el.derateStopTemp.value),
+      softStartSeconds: Number(el.softStartSeconds.value),
+      minStartRPM: Number(el.minStartRPM.value),
+      rpmHoldSeconds: Number(el.rpmHoldSeconds.value),
       canInput: el.canInput.checked,
     }),
   });
